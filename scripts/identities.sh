@@ -16,33 +16,46 @@ set -euo pipefail
 PROJECT_PATH="${1:?Usage: identities.sh <project_path> <agent_type>}"
 AGENT_TYPE="${2:?Missing agent_type}"
 
+sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEAMS_DIR="$SCRIPT_DIR/../teams"
+
+PROJECT_PATH_ESC=$(sql_escape "$PROJECT_PATH")
+AGENT_TYPE_ESC=$(sql_escape "$AGENT_TYPE")
 
 [ -d "$TEAMS_DIR" ] || exit 0
 
 for config_file in "$TEAMS_DIR"/*/config.json; do
   [ -f "$config_file" ] || continue
-  CONFIG_ESCAPED=$(sed "s/'/''/g" "$config_file")
-  TEAM_NAME=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-    "SELECT json_extract(:json, '\$.name');")
+  CONFIG_FILE_ESC=$(sql_escape "$config_file")
+  TEAM_NAME=$(sqlite3 :memory: "
+    SELECT json_extract(readfile('$CONFIG_FILE_ESC'), '\$.name');
+  ")
   [ -z "$TEAM_NAME" ] && continue
   [ "$TEAM_NAME" = "null" ] && continue
 
-  sqlite3 -separator $'\t' :memory: ".param set :json '$CONFIG_ESCAPED'" "
+  TEAM_NAME_ESC=$(sql_escape "$TEAM_NAME")
+  PROJECT_JSON_ESC=$(sqlite3 :memory: "SELECT json_quote('$PROJECT_PATH_ESC');" | sed "s/'/''/g")
+  AGENT_TYPE_JSON_ESC=$(sqlite3 :memory: "SELECT json_quote('$AGENT_TYPE_ESC');" | sed "s/'/''/g")
+
+  sqlite3 -separator $'\t' :memory: "
     WITH agents AS (
       SELECT
         key AS name,
         CASE
-          WHEN json_type(json_extract(value, '\$.registrations')) = 'array' THEN json_extract(value, '\$.registrations')
-          ELSE json_array(json_object('type', json_extract(value, '\$.type'), 'project', json_extract(value, '\$.project')))
+          WHEN json_type(value, '\$.registrations') = 'array' THEN json_extract(value, '\$.registrations')
+          ELSE json_array(json_object(
+            'type', json_extract(value, '\$.type'),
+            'project', json_extract(value, '\$.project')
+          ))
         END AS registrations
-      FROM json_each(json_extract(:json, '\$.agents'))
+      FROM json_each(readfile('$CONFIG_FILE_ESC'), '\$.agents')
     )
-    SELECT DISTINCT '$TEAM_NAME' AS team, name
+    SELECT DISTINCT '$TEAM_NAME_ESC' AS team, name
     FROM agents, json_each(agents.registrations) AS r
-    WHERE json_extract(r.value, '\$.project') = '$PROJECT_PATH'
-      AND json_extract(r.value, '\$.type') = '$AGENT_TYPE'
+    WHERE json_extract(r.value, '\$.project') = json_extract('$PROJECT_JSON_ESC', '\$')
+      AND json_extract(r.value, '\$.type') = json_extract('$AGENT_TYPE_JSON_ESC', '\$')
     ORDER BY team, name;
   "
 done

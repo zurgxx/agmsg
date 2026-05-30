@@ -39,9 +39,230 @@ resolve_hooks_file() {
   case "$type" in
     claude-code) echo "$project/.claude/settings.local.json" ;;
     codex)       echo "$project/.codex/hooks.json" ;;
+    cursor)      echo "$project/.cursor/hooks.json" ;;
     gemini|antigravity) echo "$project/.agent/rules/agmsg.md" ;;
     *) echo "Unknown agent type: $type" >&2; return 1 ;;
   esac
+}
+
+posix_shell_quote() {
+  local s="$1"
+  printf "'%s'" "$(printf '%s' "$s" | sed "s/'/'\\\\''/g")"
+}
+
+cursor_normalize_project() {
+  local project="$1"
+  if [ -d "$project" ]; then
+    (cd "$project" && pwd -P)
+  elif [ -f "$project" ]; then
+    local dir base
+    dir=$(cd "$(dirname "$project")" && pwd -P)
+    base=$(basename "$project")
+    printf '%s/%s' "$dir" "$base"
+  elif command -v realpath >/dev/null 2>&1; then
+    realpath -m "$project" 2>/dev/null || printf '%s' "$project"
+  else
+    printf '%s' "$project"
+  fi
+}
+
+cursor_expected_command() {
+  local project="$1"
+  project=$(cursor_normalize_project "$project")
+  printf '%s %s' \
+    "$(posix_shell_quote "$SKILL_DIR/scripts/check-inbox-cursor.sh")" \
+    "$(posix_shell_quote "$project")"
+}
+
+sql_path_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+cursor_json_valid() {
+  local file="$1"
+  [ ! -f "$file" ] && return 0
+  local file_esc
+  file_esc=$(printf '%s' "$file" | sed "s/'/''/g")
+  [ "$(sqlite3 :memory: "SELECT json_valid(readfile('$file_esc'));" 2>/dev/null || echo 0)" = "1" ]
+}
+
+# Remove agmsg Cursor stop hooks (exact command match only).
+# Entries with missing/null command or a different command are always kept.
+strip_agmsg_cursor_stop() {
+  local settings_esc="$1"
+  local expected_cmd_file_esc="$2"
+
+  sqlite3 :memory: "
+    SELECT CASE
+      WHEN json_extract('$settings_esc', '\$.hooks.stop') IS NULL THEN
+        '$settings_esc'
+      WHEN json_type(json_extract('$settings_esc', '\$.hooks.stop')) != 'array' THEN
+        '$settings_esc'
+      WHEN (SELECT count(*) FROM json_each(json_extract('$settings_esc', '\$.hooks.stop')) AS h
+            WHERE json_extract(h.value, '\$.command') = cast(readfile('$expected_cmd_file_esc') as text)) = 0 THEN
+        '$settings_esc'
+      ELSE
+        json_set('$settings_esc', '\$.hooks.stop',
+          (SELECT json_group_array(json(h.value))
+           FROM json_each(json_extract('$settings_esc', '\$.hooks.stop')) AS h
+           WHERE json_extract(h.value, '\$.command') IS NULL
+              OR json_extract(h.value, '\$.command') != cast(readfile('$expected_cmd_file_esc') as text)))
+    END;
+  "
+}
+
+add_cursor_stop_hook() {
+  local settings_esc="$1"
+  local expected_cmd_file_esc="$2"
+  local entry_json entry_esc
+
+  entry_json=$(sqlite3 :memory: "
+    SELECT json_object('command', cast(readfile('$expected_cmd_file_esc') as text), 'loop_limit', 1);
+  ")
+  entry_esc=$(printf '%s' "$entry_json" | sed "s/'/''/g")
+
+  sqlite3 :memory: "
+    WITH base AS (
+      SELECT CASE
+        WHEN json_extract('$settings_esc', '\$.hooks') IS NULL
+        THEN json_set('$settings_esc', '\$.hooks', json('{}'))
+        ELSE '$settings_esc'
+      END AS s
+    )
+    SELECT CASE
+      WHEN json_extract(s, '\$.hooks.stop') IS NOT NULL
+       AND json_type(json_extract(s, '\$.hooks.stop')) != 'array' THEN
+        s
+      WHEN EXISTS (
+        SELECT 1 FROM json_each(json_extract(s, '\$.hooks.stop')) AS h
+        WHERE json_extract(h.value, '\$.command') = cast(readfile('$expected_cmd_file_esc') as text)
+      ) THEN s
+      WHEN json_extract(s, '\$.hooks.stop') IS NULL THEN
+        json_set(s, '\$.hooks.stop', json_array(json('$entry_esc')))
+      ELSE
+        json_set(s, '\$.hooks.stop',
+          (SELECT json_group_array(json(v.value)) FROM (
+             SELECT value FROM json_each(json_extract(s, '\$.hooks.stop'))
+             UNION ALL
+             SELECT '$entry_esc'
+           ) v)
+        )
+    END
+    FROM base;
+  "
+}
+
+prune_empty_cursor_hooks() {
+  local s="$1"
+  sqlite3 :memory: "
+    WITH step1 AS (
+      SELECT CASE
+        WHEN json_extract('$s', '\$.hooks.stop') IS NOT NULL
+         AND json_type(json_extract('$s', '\$.hooks.stop')) = 'array'
+         AND json_array_length(json_extract('$s', '\$.hooks.stop')) = 0 THEN
+          json_remove('$s', '\$.hooks.stop')
+        ELSE '$s'
+      END AS s1
+    )
+    SELECT CASE
+      WHEN json_extract(s1, '\$.hooks') IS NOT NULL
+       AND json_type(json_extract(s1, '\$.hooks')) = 'object'
+       AND (SELECT count(*) FROM json_each(json_extract(s1, '\$.hooks'))) = 0 THEN
+        json_remove(s1, '\$.hooks')
+      ELSE s1
+    END FROM step1;
+  "
+}
+
+apply_settings_cursor() {
+  local project="$1"
+  local mode="$2"
+  local hooks_file
+  hooks_file=$(resolve_hooks_file "cursor" "$project")
+
+  case "$mode" in
+    monitor|both)
+      echo "Cursor CLI does not support delivery mode '$mode' (supported: turn, off)" >&2
+      return 1
+      ;;
+    turn|off) ;;
+    *)
+      echo "Unknown mode: $mode (use turn|off)" >&2
+      return 1
+      ;;
+  esac
+
+  mkdir -p "$(dirname "$hooks_file")"
+
+  if [ -f "$hooks_file" ] && ! cursor_json_valid "$hooks_file"; then
+    echo "Error: $hooks_file is not valid JSON; refusing to modify" >&2
+    return 1
+  fi
+
+  local settings_esc expected_cmd expected_cmd_esc hooks_file_esc
+  hooks_file_esc=$(sql_path_escape "$hooks_file")
+  if [ -f "$hooks_file" ]; then
+    settings_esc=$(read_settings_escaped "$hooks_file")
+    if [ "$(sqlite3 :memory: "
+      SELECT CASE
+        WHEN json_type(readfile('$hooks_file_esc'), '\$.hooks') IS NOT NULL
+         AND json_type(readfile('$hooks_file_esc'), '\$.hooks') != 'object'
+        THEN 1 ELSE 0 END;
+    " 2>/dev/null || echo 0)" = "1" ]; then
+      echo "Error: $hooks_file hooks must be a JSON object; refusing to modify" >&2
+      return 1
+    fi
+    if [ "$(sqlite3 :memory: "
+      SELECT CASE
+        WHEN json_type(readfile('$hooks_file_esc'), '\$.hooks.stop') IS NOT NULL
+         AND json_type(readfile('$hooks_file_esc'), '\$.hooks.stop') != 'array'
+        THEN 1 ELSE 0 END;
+    " 2>/dev/null || echo 0)" = "1" ]; then
+      echo "Error: $hooks_file hooks.stop must be a JSON array; refusing to modify" >&2
+      return 1
+    fi
+  else
+    settings_esc='{"version":1,"hooks":{}}'
+  fi
+
+  expected_cmd=$(cursor_expected_command "$project")
+  local expected_tmp expected_tmp_esc
+  expected_tmp=$(mktemp)
+  printf '%s' "$expected_cmd" > "$expected_tmp"
+  expected_tmp_esc=$(sql_path_escape "$expected_tmp")
+
+  settings_esc=$(strip_agmsg_cursor_stop "$settings_esc" "$expected_tmp_esc" | sed "s/'/''/g")
+
+  if [ "$mode" = "turn" ]; then
+    settings_esc=$(add_cursor_stop_hook "$settings_esc" "$expected_tmp_esc" | sed "s/'/''/g")
+  fi
+
+  rm -f "$expected_tmp"
+
+  settings_esc=$(prune_empty_cursor_hooks "$settings_esc" | sed "s/'/''/g")
+  settings_esc=$(sqlite3 :memory: "
+    SELECT CASE
+      WHEN json_extract('$settings_esc', '\$.version') IS NULL
+      THEN json_set('$settings_esc', '\$.version', 1)
+      ELSE '$settings_esc'
+    END;
+  " | sed "s/'/''/g")
+
+  local unescaped tmp
+  unescaped=$(printf '%s' "$settings_esc" | sed "s/''/'/g")
+  if [ "$(sqlite3 :memory: "SELECT json_valid('$settings_esc');")" != "1" ]; then
+    echo "Error: internal error generating $hooks_file (invalid JSON)" >&2
+    return 1
+  fi
+
+  tmp="$(mktemp "$(dirname "$hooks_file")/.hooks.json.XXXXXX")"
+  printf '%s' "$unescaped" > "$tmp"
+  if ! cursor_json_valid "$tmp"; then
+    rm -f "$tmp"
+    echo "Error: internal error generating $hooks_file (invalid JSON)" >&2
+    return 1
+  fi
+  mv "$tmp" "$hooks_file"
 }
 
 read_settings_escaped() {
@@ -164,6 +385,11 @@ apply_settings() {
   local project="$2"
   local mode="$3"
 
+  if [ "$type" = "cursor" ]; then
+    apply_settings_cursor "$project" "$mode"
+    return
+  fi
+
   if [ "$type" = "gemini" ] || [ "$type" = "antigravity" ]; then
     apply_settings_gemini "$type" "$project" "$mode"
     return
@@ -282,9 +508,30 @@ do_set() {
     echo "Unknown mode: $MODE (use monitor|turn|both|off)" >&2; exit 1 ;;
   esac
 
+  if [ "$TYPE" = "cursor" ]; then
+    case "$MODE" in monitor|both)
+      echo "Cursor CLI does not support delivery mode '$MODE' (supported: turn, off)" >&2
+      exit 1
+      ;;
+    esac
+  fi
+
   apply_settings "$TYPE" "$PROJECT" "$MODE"
 
   echo "Delivery mode set to '$MODE' for $PROJECT ($TYPE)"
+
+  if [ "$TYPE" = "cursor" ]; then
+    case "$MODE" in
+      turn)
+        echo "Future sessions: stop hook checks inbox between turns (interactive cursor-agent)."
+        echo "Note: headless cursor-agent --print may not fire stop hooks."
+        ;;
+      off)
+        echo "Future sessions: no automatic delivery."
+        ;;
+    esac
+    return 0
+  fi
 
   case "$MODE" in
     monitor|both)
@@ -316,7 +563,24 @@ do_status() {
   if [ -n "$TYPE" ] && [ -n "$PROJECT" ]; then
     local hf
     hf=$(resolve_hooks_file "$TYPE" "$PROJECT")
-    if [ "$TYPE" = "gemini" ] || [ "$TYPE" = "antigravity" ]; then
+    if [ "$TYPE" = "cursor" ]; then
+      local mode="off"
+      if [ -f "$hf" ]; then
+        local expected_tmp expected_tmp_esc hf_esc has_agmsg
+        expected_tmp=$(mktemp)
+        printf '%s' "$(cursor_expected_command "$PROJECT")" > "$expected_tmp"
+        expected_tmp_esc=$(sql_path_escape "$expected_tmp")
+        hf_esc=$(sql_path_escape "$hf")
+        has_agmsg=$(sqlite3 :memory: "
+          SELECT EXISTS(
+            SELECT 1 FROM json_each(json_extract(readfile('$hf_esc'), '\$.hooks.stop')) AS h
+            WHERE json_extract(h.value, '\$.command') = cast(readfile('$expected_tmp_esc') as text)
+          );" 2>/dev/null || echo 0)
+        rm -f "$expected_tmp"
+        [ "$has_agmsg" = "1" ] && mode="turn"
+      fi
+      echo "mode: $mode"
+    elif [ "$TYPE" = "gemini" ] || [ "$TYPE" = "antigravity" ]; then
       local mode="off"
       if [ -f "$hf" ]; then
         mode="turn"
@@ -347,7 +611,7 @@ do_status() {
     fi
   fi
 
-  if [ -n "$TYPE" ] && [ -n "$PROJECT" ] && [ "$TYPE" != "gemini" ] && [ "$TYPE" != "antigravity" ]; then
+  if [ -n "$TYPE" ] && [ -n "$PROJECT" ] && [ "$TYPE" != "gemini" ] && [ "$TYPE" != "antigravity" ] && [ "$TYPE" != "cursor" ]; then
     local hooks_file
     hooks_file=$(resolve_hooks_file "$TYPE" "$PROJECT")
     if [ -f "$hooks_file" ]; then

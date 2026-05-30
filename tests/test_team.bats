@@ -227,3 +227,14 @@ teardown() {
   [ "$status" -eq 0 ]
 }
 
+@test "join: accepts cursor" {
+  run bash "$SCRIPTS/join.sh" myteam alice cursor /tmp/proj
+  [ "$status" -eq 0 ]
+}
+
+@test "join: unknown type error mentions cursor" {
+  run bash "$SCRIPTS/join.sh" myteam alice bogus /tmp/proj
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "cursor" ]]
+}
+

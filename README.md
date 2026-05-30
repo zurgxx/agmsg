@@ -2,7 +2,7 @@
 
 Cross-agent messaging for CLI AI agents. No daemon, no network, no complexity.
 
-Claude Code, Codex, Gemini CLI, and any CLI agent can message each other via a shared SQLite database.
+Claude Code, Codex, Gemini CLI, Cursor CLI, and any CLI agent can message each other via a shared SQLite database.
 
 Two `monitor`-mode Claude Code instances, left alone in the same team, play tic-tac-toe against each other with no human in the loop — each picks up the other's move in real time:
 
@@ -28,7 +28,7 @@ git clone https://github.com/fujibee/agmsg.git && cd agmsg && ./install.sh
 #    Codex:        $agmsg
 ```
 
-That's it. Once two agents have joined the same team, they can message each other. On first join, you'll be asked to pick a **delivery mode** — see [Delivery modes](#delivery-modes) below for the four options. The default on Claude Code is `monitor` (real-time push); Codex defaults to `turn` (between-turns check) because it has no Monitor tool.
+That's it. Once two agents have joined the same team, they can message each other. On first join, you'll be asked to pick a **delivery mode** — see [Delivery modes](#delivery-modes) below for the four options. The default on Claude Code is `monitor` (real-time push); Codex defaults to `turn` (between-turns check) because it has no Monitor tool. **Cursor CLI** is manual inbox + optional `turn` via project `.cursor/hooks.json` (no monitor in Phase 1).
 
 After setup, your agent handles everything — just talk to it naturally. "Send alice a message saying the deploy is done", "check my messages", "who's on the team" all work. The shell scripts below are for reference and advanced use.
 
@@ -144,6 +144,8 @@ How incoming messages reach your agent. Pick one at first join via the prompt, o
 | **`both`** | monitor primary, turn as per-session safety net | ~5s; falls back to turn-end on watcher failure | belt-and-suspenders |
 | **`off`** | no automatic delivery | manual `/agmsg` only | minimalists |
 
+**Cursor CLI** supports **`turn`** and **`off`** only (no Monitor tool). Turn mode uses project `.cursor/hooks.json` (`hooks.stop[]`) and returns `followup_message` on unread mail. It targets interactive `cursor-agent`; headless `cursor-agent --print` may not fire stop hooks. Git-backed workspaces are recommended for project hooks.
+
 ### Picking a mode
 
 ```
@@ -190,6 +192,22 @@ $agmsg                          — or /skills → agmsg
 ```
 
 Codex supports `mode turn` and `mode off` only — there's no Monitor tool to stream into.
+
+### Cursor CLI
+
+Manual: run agmsg scripts from the agent (see `templates/cmd.cursor.md` in the skill install). Typical flow:
+
+```bash
+~/.agents/skills/agmsg/scripts/whoami.sh "$(pwd)" cursor
+~/.agents/skills/agmsg/scripts/inbox.sh <team> <agent>
+~/.agents/skills/agmsg/scripts/delivery.sh set turn cursor "$(pwd)"
+```
+
+- **turn** — `.cursor/hooks.json` stop hook → `check-inbox-cursor.sh` → `followup_message` when unread (not `decision:block` / `systemMessage`)
+- **off** — manual script calls only
+- **monitor / both** — not supported on Cursor
+
+Cursor does not read `SKILL.md` the way Codex does; use `templates/cmd.cursor.md` (installed under the skill) or project rules you add yourself. Phase 1 does not ship `.cursor/rules/` or `.cursor/commands/` UX.
 
 ### Shell (any agent)
 
