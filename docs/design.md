@@ -87,6 +87,14 @@ Cursor can use `~/.agents/skills/<cmd>/SKILL.md` from `/agmsg` or `/skills` as a
 
 `delivery.sh set turn cursor <project>` configures both `.cursor/hooks.json` and the managed `.cursor/rules/agmsg.mdc` rule. `set off` removes the stop hook but leaves the rule in place for manual-only use. agmsg does not auto-generate `.cursor/skills` or `AGENTS.md`.
 
+### Cursor integration components
+
+- **hook:** `.cursor/hooks.json`, stop hook for turn delivery
+- **rule:** `.cursor/rules/agmsg.mdc`, always-on guidance generated from `templates/cursor-rule.mdc`
+- **skill:** `~/.agents/skills/<cmd>/SKILL.md`, manual entry point via `/agmsg` or `/skills`
+
+Cursor currently supports only `turn` and `off` delivery modes. `monitor` and `both` are intentionally unsupported. `delivery.sh set off cursor <project>` removes the managed hook but leaves the managed rule in place, and agmsg does not generate `.cursor/skills` or `AGENTS.md`.
+
 **Claude Code monitor** (`session-start.sh` + `watch.sh`): separate path — streams new rows into the session via the Monitor tool; not a stop-hook JSON response.
 
 **Gemini / Antigravity**: PostToolUse rule file invoking `check-inbox.sh` (turn-style inbox check, not Cursor/Codex JSON).

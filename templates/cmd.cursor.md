@@ -7,6 +7,14 @@ Agent messaging for **Cursor CLI** (`cursor-agent`). **IMPORTANT: Always use the
 
 Cursor supports **manual inbox** and **turn** delivery only. Cursor does not use Codex-style `decision:block` or `systemMessage` JSON — turn mode uses `.cursor/hooks.json` `stop` hooks, `.cursor/rules/agmsg.mdc` guidance, and `followup_message`.
 
+If this command or skill is missing, install agmsg from the repository:
+
+```bash
+./install.sh --cmd __SKILL_NAME__
+```
+
+Then restart Cursor or reload its rules/skills.
+
 ## Identity
 
 Run: `~/.agents/skills/__SKILL_NAME__/scripts/whoami.sh "$(pwd)" cursor`
@@ -63,6 +71,7 @@ Set mode: `delivery.sh set <turn|off> cursor "$(pwd)"`
 Status: `delivery.sh status cursor "$(pwd)"`
 
 **Notes:**
+- For Cursor, turn mode uses both `.cursor/hooks.json` for stop-hook delivery and `.cursor/rules/agmsg.mdc` for always-on guidance.
 - Turn mode requires a **single** `(project, cursor)` identity; multiple agents on the same project disable automatic inbox checks (`{}`).
 - Turn mode targets **interactive** `cursor-agent`. Headless `cursor-agent --print` may not fire `stop` hooks.
 - `delivery.sh set turn cursor "$(pwd)"` manages `<project>/.cursor/hooks.json` and `<project>/.cursor/rules/agmsg.mdc`.

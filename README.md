@@ -145,7 +145,7 @@ How incoming messages reach your agent. Pick one at first join via the prompt, o
 | **`both`** | monitor primary, turn as per-session safety net | ~5s; falls back to turn-end on watcher failure | belt-and-suspenders |
 | **`off`** | no automatic delivery | manual `/agmsg` only | minimalists |
 
-**Cursor CLI** supports **`turn`** and **`off`** only (no Monitor tool). Turn mode uses project `.cursor/hooks.json` (`hooks.stop[]`) and returns `followup_message` on unread mail. `delivery.sh set turn cursor <project>` also creates or updates `.cursor/rules/agmsg.mdc`, which is the always-on Cursor guidance for using agmsg scripts. `set off` removes the hook but leaves the rule in place for manual use. agmsg does not auto-generate `.cursor/skills` or `AGENTS.md`.
+**Cursor CLI** supports **`turn`** and **`off`** only (no Monitor tool). Turn mode uses project `.cursor/hooks.json` (`hooks.stop[]`) and returns `followup_message` on unread mail. `delivery.sh set turn cursor <project>` creates or updates both the hook and the managed `.cursor/rules/agmsg.mdc` rule. `delivery.sh set off cursor <project>` removes only the hook and leaves the rule in place for manual use. agmsg does not auto-generate `.cursor/skills` or `AGENTS.md`.
 
 ### Picking a mode
 
@@ -196,7 +196,19 @@ Codex supports `mode turn` and `mode off` only — there's no Monitor tool to st
 
 ### Cursor CLI
 
-Manual: use `/agmsg` or `/skills` as the entry point, then run agmsg scripts from the agent. The installed `SKILL.md` is useful for manual startup, while `.cursor/rules/agmsg.mdc` is the always-on project guidance configured by turn delivery. Typical flow:
+Manual: use `/agmsg` or `/skills` as the entry point, then run agmsg scripts from the agent. If Cursor cannot find the agmsg skill, run this from the agmsg repository and then restart Cursor or reload rules/skills:
+
+```bash
+./install.sh --cmd agmsg
+```
+
+Cursor integration has three parts:
+
+- **hook** — `.cursor/hooks.json`; stop hook for `turn` delivery
+- **rule** — `.cursor/rules/agmsg.mdc`; always-on Cursor guidance
+- **skill** — `~/.agents/skills/agmsg/SKILL.md`; manual entry point via `/agmsg` or `/skills`
+
+Typical flow:
 
 ```bash
 ~/.agents/skills/agmsg/scripts/whoami.sh "$(pwd)" cursor
@@ -205,7 +217,7 @@ Manual: use `/agmsg` or `/skills` as the entry point, then run agmsg scripts fro
 ```
 
 - **turn** — creates/updates `.cursor/hooks.json` and managed `.cursor/rules/agmsg.mdc`; stop hook → `check-inbox-cursor.sh` → `followup_message` when unread (not `decision:block` / `systemMessage`)
-- **off** — manual script calls only
+- **off** — removes the agmsg hook only; keeps the rule for manual script guidance
 - **monitor / both** — not supported on Cursor
 
 Markerless existing `.cursor/rules/agmsg.mdc` files are left untouched with a warning. Other files under `.cursor/rules/` are not modified.
