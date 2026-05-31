@@ -21,14 +21,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fujibee/agmsg/main/setup.sh)
 # Or clone first if you want to inspect the code
 git clone https://github.com/fujibee/agmsg.git && cd agmsg && ./install.sh
 
-# 2. Restart Claude Code / Codex to pick up the new skill
+# 2. Restart Claude Code / Codex / Cursor to pick up the new skill
 
 # 3. Run the command — it will prompt for team and agent name on first use
 #    Claude Code:  /agmsg
 #    Codex:        $agmsg
+#    Cursor:       /agmsg or /skills
 ```
 
-That's it. Once two agents have joined the same team, they can message each other. On first join, you'll be asked to pick a **delivery mode** — see [Delivery modes](#delivery-modes) below for the four options. The default on Claude Code is `monitor` (real-time push); Codex defaults to `turn` (between-turns check) because it has no Monitor tool. **Cursor CLI** is manual inbox + optional `turn` via project `.cursor/hooks.json` (no monitor in Phase 1).
+That's it. Once two agents have joined the same team, they can message each other. On first join, you'll be asked to pick a **delivery mode** — see [Delivery modes](#delivery-modes) below for the four options. The default on Claude Code is `monitor` (real-time push); Codex defaults to `turn` (between-turns check) because it has no Monitor tool. **Cursor CLI** is manual inbox + optional `turn` via project `.cursor/hooks.json` plus `.cursor/rules/agmsg.mdc` guidance.
 
 After setup, your agent handles everything — just talk to it naturally. "Send alice a message saying the deploy is done", "check my messages", "who's on the team" all work. The shell scripts below are for reference and advanced use.
 
@@ -44,7 +45,7 @@ The **command name** determines:
 - Claude Code: `/<cmd>`
 - Codex: `$<cmd>`
 
-After install, **restart your agent** (Claude Code / Codex) so it picks up the new skill.
+After install, **restart your agent** (Claude Code / Codex / Cursor) so it picks up the new skill.
 
 ## Join a Team
 
@@ -144,7 +145,7 @@ How incoming messages reach your agent. Pick one at first join via the prompt, o
 | **`both`** | monitor primary, turn as per-session safety net | ~5s; falls back to turn-end on watcher failure | belt-and-suspenders |
 | **`off`** | no automatic delivery | manual `/agmsg` only | minimalists |
 
-**Cursor CLI** supports **`turn`** and **`off`** only (no Monitor tool). Turn mode uses project `.cursor/hooks.json` (`hooks.stop[]`) and returns `followup_message` on unread mail. It targets interactive `cursor-agent`; headless `cursor-agent --print` may not fire stop hooks. Git-backed workspaces are recommended for project hooks.
+**Cursor CLI** supports **`turn`** and **`off`** only (no Monitor tool). Turn mode uses project `.cursor/hooks.json` (`hooks.stop[]`) and returns `followup_message` on unread mail. `delivery.sh set turn cursor <project>` also creates or updates `.cursor/rules/agmsg.mdc`, which is the always-on Cursor guidance for using agmsg scripts. `set off` removes the hook but leaves the rule in place for manual use. agmsg does not auto-generate `.cursor/skills` or `AGENTS.md`.
 
 ### Picking a mode
 
@@ -195,7 +196,7 @@ Codex supports `mode turn` and `mode off` only — there's no Monitor tool to st
 
 ### Cursor CLI
 
-Manual: run agmsg scripts from the agent (see `templates/cmd.cursor.md` in the skill install). Typical flow:
+Manual: use `/agmsg` or `/skills` as the entry point, then run agmsg scripts from the agent. The installed `SKILL.md` is useful for manual startup, while `.cursor/rules/agmsg.mdc` is the always-on project guidance configured by turn delivery. Typical flow:
 
 ```bash
 ~/.agents/skills/agmsg/scripts/whoami.sh "$(pwd)" cursor
@@ -203,11 +204,11 @@ Manual: run agmsg scripts from the agent (see `templates/cmd.cursor.md` in the s
 ~/.agents/skills/agmsg/scripts/delivery.sh set turn cursor "$(pwd)"
 ```
 
-- **turn** — `.cursor/hooks.json` stop hook → `check-inbox-cursor.sh` → `followup_message` when unread (not `decision:block` / `systemMessage`)
+- **turn** — creates/updates `.cursor/hooks.json` and managed `.cursor/rules/agmsg.mdc`; stop hook → `check-inbox-cursor.sh` → `followup_message` when unread (not `decision:block` / `systemMessage`)
 - **off** — manual script calls only
 - **monitor / both** — not supported on Cursor
 
-Cursor does not read `SKILL.md` the way Codex does; use `templates/cmd.cursor.md` (installed under the skill) or project rules you add yourself. Phase 1 does not ship `.cursor/rules/` or `.cursor/commands/` UX.
+Markerless existing `.cursor/rules/agmsg.mdc` files are left untouched with a warning. Other files under `.cursor/rules/` are not modified.
 
 ### Shell (any agent)
 
@@ -254,7 +255,7 @@ bats tests/    # requires bats-core: brew install bats-core
 
 ```
 ~/.agents/skills/<cmd>/           # Folder name = command name
-├── SKILL.md                      # Skill definition (read by CC & Codex)
+├── SKILL.md                      # Skill definition/manual entry point
 ├── agents/
 │   └── openai.yaml               # Codex metadata
 ├── scripts/                      # Bash scripts

@@ -16,6 +16,10 @@ cursor_hooks_file() {
   echo "$TEST_PROJECT/.cursor/hooks.json"
 }
 
+cursor_rule_file() {
+  echo "$TEST_PROJECT/.cursor/rules/agmsg.mdc"
+}
+
 posix_shell_quote() {
   local s="$1"
   printf "'%s'" "$(printf '%s' "$s" | sed "s/'/'\\\\''/g")"
@@ -74,12 +78,73 @@ hooks_json_valid() {
   [[ "$output" =~ "cursor" ]]
 }
 
+@test "install: copies cursor rule template into installed skill templates" {
+  local home installed_rule
+  home="$(mktemp -d)"
+  run env HOME="$home" bash "$BATS_TEST_DIRNAME/../install.sh" --cmd agmsgtest
+  [ "$status" -eq 0 ]
+  installed_rule="$home/.agents/skills/agmsgtest/templates/cursor-rule.mdc"
+  [ -f "$installed_rule" ]
+  grep -Fq 'alwaysApply: true' "$installed_rule"
+  grep -Fq '~/.agents/skills/agmsgtest/scripts/whoami.sh "$(pwd)" cursor' "$installed_rule"
+  rm -rf "$home"
+}
+
 # --- delivery set turn ---
 
 @test "delivery set turn cursor: creates .cursor/hooks.json" {
   run bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
   [ "$status" -eq 0 ]
   [ -f "$(cursor_hooks_file)" ]
+}
+
+@test "delivery set turn cursor: creates managed .cursor/rules/agmsg.mdc" {
+  run bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  [ -f "$(cursor_rule_file)" ]
+  grep -Fq '<!-- agmsg:managed file=agmsg.mdc -->' "$(cursor_rule_file)"
+  grep -Fq 'alwaysApply: true' "$(cursor_rule_file)"
+}
+
+@test "delivery set turn cursor: rule contains Cursor operational guidance" {
+  bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  grep -Fq 'whoami.sh "$(pwd)" cursor' "$(cursor_rule_file)"
+  grep -Fq 'supports only `turn` and `off`' "$(cursor_rule_file)"
+  grep -Fq 'followup_message' "$(cursor_rule_file)"
+  grep -Fq 'does not use Codex-style `decision:block` or' "$(cursor_rule_file)"
+  grep -Fq 'systemMessage' "$(cursor_rule_file)"
+}
+
+@test "delivery set turn cursor: missing rule template fails before creating hooks.json" {
+  mv "$TEST_SKILL_DIR/templates/cursor-rule.mdc" "$TEST_SKILL_DIR/templates/cursor-rule.mdc.bak"
+  run bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "Cursor rule template not found" ]]
+  [ ! -f "$(cursor_hooks_file)" ]
+  [ ! -f "$(cursor_rule_file)" ]
+}
+
+@test "delivery set turn cursor: missing rule template leaves existing hooks unchanged" {
+  mkdir -p "$TEST_PROJECT/.cursor"
+  cat > "$(cursor_hooks_file)" <<'JSON'
+{
+  "version": 1,
+  "hooks": {
+    "stop": [{"command": "other-hook.sh", "loop_limit": 2}]
+  }
+}
+JSON
+  local before
+  before=$(cat "$(cursor_hooks_file)")
+  mv "$TEST_SKILL_DIR/templates/cursor-rule.mdc" "$TEST_SKILL_DIR/templates/cursor-rule.mdc.bak"
+  run bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "Cursor rule template not found" ]]
+  [ "$(cat "$(cursor_hooks_file)")" = "$before" ]
+  local n
+  n=$(agmsg_cursor_stop_count "$(cursor_hooks_file)" "$TEST_PROJECT")
+  [ "$n" = "0" ]
+  grep -q 'other-hook.sh' "$(cursor_hooks_file)"
 }
 
 @test "delivery set turn cursor: schema version 1 and hooks.stop" {
@@ -112,6 +177,40 @@ hooks_json_valid() {
   local n
   n=$(agmsg_cursor_stop_count "$(cursor_hooks_file)" "$TEST_PROJECT")
   [ "$n" = "1" ]
+  local marker_count
+  marker_count=$(grep -F -c '<!-- agmsg:managed file=agmsg.mdc -->' "$(cursor_rule_file)")
+  [ "$marker_count" = "1" ]
+}
+
+@test "delivery set turn cursor: updates existing managed agmsg rule" {
+  mkdir -p "$TEST_PROJECT/.cursor/rules"
+  cat > "$(cursor_rule_file)" <<'EOF'
+<!-- agmsg:managed file=agmsg.mdc -->
+old content
+EOF
+  bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  grep -Fq 'alwaysApply: true' "$(cursor_rule_file)"
+  ! grep -Fq 'old content' "$(cursor_rule_file)"
+}
+
+@test "delivery set turn cursor: preserves existing unmarked agmsg rule and still configures hook" {
+  mkdir -p "$TEST_PROJECT/.cursor/rules"
+  printf 'custom cursor rule\n' > "$(cursor_rule_file)"
+  run bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "exists without agmsg marker" ]]
+  [ "$(cat "$(cursor_rule_file)")" = "custom cursor rule" ]
+  local n
+  n=$(agmsg_cursor_stop_count "$(cursor_hooks_file)" "$TEST_PROJECT")
+  [ "$n" = "1" ]
+}
+
+@test "delivery set turn cursor: preserves other cursor rule files" {
+  mkdir -p "$TEST_PROJECT/.cursor/rules"
+  printf 'other rule\n' > "$TEST_PROJECT/.cursor/rules/other.mdc"
+  bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  [ "$(cat "$TEST_PROJECT/.cursor/rules/other.mdc")" = "other rule" ]
+  [ -f "$(cursor_rule_file)" ]
 }
 
 @test "delivery set turn cursor: preserves other hook events" {
@@ -164,6 +263,7 @@ JSON
   cmd=$(sqlite3 :memory: "SELECT json_extract(readfile('$spaced/.cursor/hooks.json'), '\$.hooks.stop[0].command');")
   [[ "$cmd" =~ "my project" ]]
   [[ "$cmd" =~ "check-inbox-cursor.sh" ]]
+  [ -f "$spaced/.cursor/rules/agmsg.mdc" ]
   rm -rf "$(dirname "$spaced")"
 }
 
@@ -343,17 +443,28 @@ JSON
   ! grep -q 'check-inbox-cursor.sh' "$(cursor_hooks_file)"
 }
 
+@test "delivery set off cursor: removes hook but keeps managed rule" {
+  bash "$SCRIPTS/delivery.sh" set turn cursor "$TEST_PROJECT"
+  bash "$SCRIPTS/delivery.sh" set off cursor "$TEST_PROJECT"
+  [ -f "$(cursor_rule_file)" ]
+  local n
+  n=$(agmsg_cursor_stop_count "$(cursor_hooks_file)" "$TEST_PROJECT")
+  [ "$n" = "0" ]
+}
+
 @test "delivery set monitor cursor: rejected" {
   run bash "$SCRIPTS/delivery.sh" set monitor cursor "$TEST_PROJECT"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "does not support" ]]
   [ ! -f "$(cursor_hooks_file)" ] || ! grep -q 'check-inbox-cursor' "$(cursor_hooks_file)" 2>/dev/null
+  [ ! -f "$(cursor_rule_file)" ]
 }
 
 @test "delivery set both cursor: rejected" {
   run bash "$SCRIPTS/delivery.sh" set both cursor "$TEST_PROJECT"
   [ "$status" -ne 0 ]
   [[ "$output" =~ "does not support" ]]
+  [ ! -f "$(cursor_rule_file)" ]
 }
 
 @test "delivery set turn cursor: invalid JSON is not overwritten" {

@@ -32,6 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_NAME="$(basename "$SKILL_DIR")"
 RUN_DIR="$SKILL_DIR/run"
+CURSOR_RULE_MARKER="<!-- agmsg:managed file=agmsg.mdc -->"
 
 resolve_hooks_file() {
   local type="$1"
@@ -72,6 +73,38 @@ cursor_expected_command() {
   printf '%s %s' \
     "$(posix_shell_quote "$SKILL_DIR/scripts/check-inbox-cursor.sh")" \
     "$(posix_shell_quote "$project")"
+}
+
+cursor_rule_file() {
+  local project="$1"
+  printf '%s/.cursor/rules/agmsg.mdc' "$project"
+}
+
+sed_replacement_escape() {
+  printf '%s' "$1" | sed 's/[\/&\\]/\\&/g'
+}
+
+write_cursor_rule() {
+  local project="$1"
+  local rule_file template skill_name_esc tmp
+  rule_file=$(cursor_rule_file "$project")
+  template="$SKILL_DIR/templates/cursor-rule.mdc"
+
+  if [ -f "$rule_file" ] && ! grep -Fq "$CURSOR_RULE_MARKER" "$rule_file"; then
+    echo "Warning: $rule_file exists without agmsg marker; leaving it unchanged" >&2
+    return 0
+  fi
+
+  if [ ! -f "$template" ]; then
+    echo "Error: Cursor rule template not found: $template" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$rule_file")"
+  tmp="$(mktemp "$(dirname "$rule_file")/.agmsg.mdc.XXXXXX")"
+  skill_name_esc=$(sed_replacement_escape "$SKILL_NAME")
+  sed "s/__SKILL_NAME__/$skill_name_esc/g" "$template" > "$tmp"
+  mv "$tmp" "$rule_file"
 }
 
 sql_path_escape() {
@@ -223,6 +256,10 @@ apply_settings_cursor() {
     fi
   else
     settings_esc='{"version":1,"hooks":{}}'
+  fi
+
+  if [ "$mode" = "turn" ]; then
+    write_cursor_rule "$project" || return 1
   fi
 
   expected_cmd=$(cursor_expected_command "$project")

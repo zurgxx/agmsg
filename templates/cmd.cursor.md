@@ -5,7 +5,7 @@ description: Cross-agent messaging via SQLite for Cursor CLI. Send messages betw
 
 Agent messaging for **Cursor CLI** (`cursor-agent`). **IMPORTANT: Always use the provided scripts. NEVER directly read or edit config files, DB, or team data. There is NO register.sh — use join.sh to join a team.**
 
-Phase 1 covers **manual inbox** and **turn** delivery only. Cursor does not use Codex-style `decision:block` or `systemMessage` JSON — turn mode uses `.cursor/hooks.json` `stop` hooks and `followup_message`.
+Cursor supports **manual inbox** and **turn** delivery only. Cursor does not use Codex-style `decision:block` or `systemMessage` JSON — turn mode uses `.cursor/hooks.json` `stop` hooks, `.cursor/rules/agmsg.mdc` guidance, and `followup_message`.
 
 ## Identity
 
@@ -65,7 +65,9 @@ Status: `delivery.sh status cursor "$(pwd)"`
 **Notes:**
 - Turn mode requires a **single** `(project, cursor)` identity; multiple agents on the same project disable automatic inbox checks (`{}`).
 - Turn mode targets **interactive** `cursor-agent`. Headless `cursor-agent --print` may not fire `stop` hooks.
-- Project hooks live in `<project>/.cursor/hooks.json`. Git-backed workspaces are recommended.
+- `delivery.sh set turn cursor "$(pwd)"` manages `<project>/.cursor/hooks.json` and `<project>/.cursor/rules/agmsg.mdc`.
+- `delivery.sh set off cursor "$(pwd)"` removes the hook but leaves the rule for manual guidance.
+- Git-backed workspaces are recommended for project hooks/rules.
 - Hook stdin may contain `user_email` — never log or persist hook stdin JSON.
 
 ## Subcommands

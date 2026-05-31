@@ -1,0 +1,43 @@
+---
+description: agmsg operational guidance for Cursor CLI
+alwaysApply: true
+---
+
+<!-- agmsg:managed file=agmsg.mdc -->
+
+# agmsg for Cursor CLI
+
+Use agmsg only through scripts under `~/.agents/skills/__SKILL_NAME__/scripts/`.
+Do not directly read or edit the agmsg DB, config files, or team data.
+
+Start by identifying this Cursor project:
+
+```bash
+~/.agents/skills/__SKILL_NAME__/scripts/whoami.sh "$(pwd)" cursor
+```
+
+If not joined, ask for team and agent name, then run:
+
+```bash
+~/.agents/skills/__SKILL_NAME__/scripts/join.sh <team> <agent_name> cursor "$(pwd)"
+```
+
+Common operations:
+
+- Inbox: `~/.agents/skills/__SKILL_NAME__/scripts/inbox.sh <team> <agent>`
+- Send: `~/.agents/skills/__SKILL_NAME__/scripts/send.sh <team> <from> <to> "<message>"`
+- History: `~/.agents/skills/__SKILL_NAME__/scripts/history.sh <team> [agent] [limit]`
+- Team: `~/.agents/skills/__SKILL_NAME__/scripts/team.sh <team>`
+- Delivery status: `~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh status cursor "$(pwd)"`
+- Delivery mode: `~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh set <turn|off> cursor "$(pwd)"`
+
+Cursor delivery supports only `turn` and `off`. Do not use `monitor` or `both`.
+
+`turn` mode is configured in `.cursor/hooks.json` and runs `check-inbox-cursor.sh`
+from `hooks.stop[]`. When unread messages exist, the hook returns
+`followup_message`. Cursor does not use Codex-style `decision:block` or
+`systemMessage`.
+
+If multiple agmsg identities match this same `(project, cursor)` registration,
+the turn hook may return `{}`. Resolve the identity first, then check inbox or
+send messages with the scripts above.

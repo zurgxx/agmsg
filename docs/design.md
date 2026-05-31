@@ -83,6 +83,10 @@ Agent turn ends → .cursor/hooks.json stop → check-inbox-cursor.sh
 
 Cursor does **not** use Codex-style `decision:block` or `systemMessage`. It uses `followup_message` only.
 
+Cursor can use `~/.agents/skills/<cmd>/SKILL.md` from `/agmsg` or `/skills` as a manual entry point, but that content is not the always-on guidance. Cursor's persistent project guidance is `<project>/.cursor/rules/agmsg.mdc`.
+
+`delivery.sh set turn cursor <project>` configures both `.cursor/hooks.json` and the managed `.cursor/rules/agmsg.mdc` rule. `set off` removes the stop hook but leaves the rule in place for manual-only use. agmsg does not auto-generate `.cursor/skills` or `AGENTS.md`.
+
 **Claude Code monitor** (`session-start.sh` + `watch.sh`): separate path — streams new rows into the session via the Monitor tool; not a stop-hook JSON response.
 
 **Gemini / Antigravity**: PostToolUse rule file invoking `check-inbox.sh` (turn-style inbox check, not Cursor/Codex JSON).
@@ -128,7 +132,7 @@ All scripts use only `bash` and `sqlite3`. No python3 dependency.
 ├── agents/
 │   └── openai.yaml       # Codex metadata
 ├── scripts/              # All shell scripts
-├── templates/            # Command templates (cmd.claude-code.md, cmd.codex.md, cmd.cursor.md)
+├── templates/            # Command templates and Cursor rule template
 ├── db/
 │   ├── messages.db       # SQLite message store
 │   ├── config.yaml       # User configuration

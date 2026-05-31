@@ -80,7 +80,8 @@ if [ "$UPDATE_ONLY" = true ]; then
   echo "  Updating $SKILL_NAME..."
   sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.codex.md" > "$SKILL_DIR/SKILL.md"
   cp "$SCRIPT_DIR/scripts/"*.sh "$SKILL_DIR/scripts/"
-  for tmpl in "$SCRIPT_DIR/templates/"cmd.*.md; do
+  for tmpl in "$SCRIPT_DIR/templates/"*; do
+    [ -f "$tmpl" ] || continue
     sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$tmpl" > "$SKILL_DIR/templates/$(basename "$tmpl")"
   done
   # Refresh the Claude Code slash command file (was missed in earlier --update flows).
@@ -120,7 +121,8 @@ sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.codex.md" > "$SKIL
 cp "$SCRIPT_DIR/scripts/"*.sh "$SKILL_DIR/scripts/"
 
 # Replace placeholder in templates with actual skill name
-for tmpl in "$SCRIPT_DIR/templates/"cmd.*.md; do
+for tmpl in "$SCRIPT_DIR/templates/"*; do
+  [ -f "$tmpl" ] || continue
   sed "s/__SKILL_NAME__/$CMD_NAME/g" "$tmpl" > "$SKILL_DIR/templates/$(basename "$tmpl")"
 done
 
@@ -203,6 +205,7 @@ echo "  Next steps:"
 echo "    2. Run the command to join a team:"
 echo "       Claude Code:  /$CMD_NAME"
 echo "       Codex:        \$$CMD_NAME"
+echo "       Cursor:       /$CMD_NAME or /skills, then set turn delivery per project"
 echo "       It will prompt for team name and agent name on first run."
 echo ""
 echo "  Docs: https://agmsg.cc/"
