@@ -21,23 +21,68 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENTS_DIR="$HOME/.agents"
 
+validate_agent_type() {
+  case "$1" in
+    codex|gemini|antigravity|cursor) return 0 ;;
+    *)
+      echo "Error: unsupported --agent-type '$1' (supported: codex, gemini, antigravity, cursor)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+skill_template_for_agent_type() {
+  case "$1" in
+    codex)       printf '%s' "cmd.codex.md" ;;
+    gemini)      printf '%s' "cmd.gemini.md" ;;
+    antigravity) printf '%s' "cmd.antigravity.md" ;;
+    cursor)      printf '%s' "cmd.cursor.md" ;;
+    *)
+      echo "Error: unsupported agent type '$1' (supported: codex, gemini, antigravity, cursor)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+detect_agent_type_from_skill_md() {
+  local skill_md="$1"
+  if [ ! -f "$skill_md" ]; then
+    printf '%s' "codex"
+    return
+  fi
+  if grep -q "whoami.sh.*antigravity" "$skill_md" 2>/dev/null; then
+    printf '%s' "antigravity"
+  elif grep -q "whoami.sh.*gemini" "$skill_md" 2>/dev/null; then
+    printf '%s' "gemini"
+  elif grep -q "whoami.sh.*cursor" "$skill_md" 2>/dev/null; then
+    printf '%s' "cursor"
+  else
+    printf '%s' "codex"
+  fi
+}
+
 # --- Defaults ---
 CMD_NAME=""
 UPDATE_ONLY=false
 INTERACTIVE=true
+AGENT_TYPE=""  # codex, gemini, antigravity, cursor — passed via --agent-type, or empty for auto/default
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cmd)    CMD_NAME="$2"; INTERACTIVE=false; shift 2 ;;
+    --agent-type) AGENT_TYPE="$2"; shift 2 ;;
     --update) UPDATE_ONLY=true; shift ;;
     -h|--help)
       echo "Usage: ./install.sh [options]"
       echo ""
       echo "Options:"
-      echo "  --cmd <name>   Command & skill folder name (default: agmsg)"
-      echo "                 Claude Code: /<cmd>, Codex: \$<cmd>"
-      echo "  --update       Update skill scripts only (preserve DB and teams)"
+      echo "  --cmd <name>      Command & skill folder name (default: agmsg)"
+      echo "                    Claude Code: /<cmd>, Codex/Gemini/Antigravity: \$<cmd>"
+      echo "  --agent-type <t>  Agent type: codex, gemini, antigravity, cursor"
+      echo "                    Selects which template becomes SKILL.md (matches the"
+      echo "                    <type> arg passed to join.sh / whoami.sh)"
+      echo "  --update          Update skill scripts only (preserve DB and teams)"
       echo ""
       echo "After install, join a team per-project:"
       echo "  ~/.agents/skills/<cmd>/scripts/join.sh <team> <name> <type> <project>"
@@ -47,6 +92,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+if [ -n "$AGENT_TYPE" ]; then
+  validate_agent_type "$AGENT_TYPE"
+fi
 
 # --- Check dependencies ---
 if ! command -v sqlite3 &>/dev/null; then
@@ -78,8 +127,13 @@ if [ "$UPDATE_ONLY" = true ]; then
   fi
   SKILL_NAME="$(basename "$SKILL_DIR")"
   echo "  Updating $SKILL_NAME..."
-  sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.codex.md" > "$SKILL_DIR/SKILL.md"
-  cp "$SCRIPT_DIR/scripts/"*.sh "$SKILL_DIR/scripts/"
+  if [ -z "$AGENT_TYPE" ]; then
+    AGENT_TYPE=$(detect_agent_type_from_skill_md "$SKILL_DIR/SKILL.md")
+  fi
+  SKILL_TEMPLATE=$(skill_template_for_agent_type "$AGENT_TYPE")
+  sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/$SKILL_TEMPLATE" > "$SKILL_DIR/SKILL.md"
+  # Recursive copy so nested helper dirs (scripts/lib/) ship without enumerating files.
+  cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
   for tmpl in "$SCRIPT_DIR/templates/"*; do
     [ -f "$tmpl" ] || continue
     sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$tmpl" > "$SKILL_DIR/templates/$(basename "$tmpl")"
@@ -89,10 +143,23 @@ if [ "$UPDATE_ONLY" = true ]; then
   if [ -d "$CC_COMMANDS_DIR" ] && [ -f "$CC_COMMANDS_DIR/$SKILL_NAME.md" ]; then
     sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.claude-code.md" > "$CC_COMMANDS_DIR/$SKILL_NAME.md"
   fi
+  # Refresh / install the Copilot CLI skill (Copilot reads SKILL.md from its
+  # own skills dir; the shared ~/.agents/skills/<name>/SKILL.md is
+  # Codex-typed and would mis-identify the agent as codex when invoked from
+  # Copilot). Same condition as the fresh-install path so users upgrading
+  # from a pre-Copilot release via --update also gain the skill.
+  COPILOT_SKILL_DIR="$HOME/.copilot/skills/$SKILL_NAME"
+  if [ -d "$HOME/.copilot" ]; then
+    mkdir -p "$COPILOT_SKILL_DIR"
+    sed "s/__SKILL_NAME__/$SKILL_NAME/g" "$SCRIPT_DIR/templates/cmd.copilot.md" > "$COPILOT_SKILL_DIR/SKILL.md"
+  fi
   cp "$SCRIPT_DIR/openai.yaml" "$SKILL_DIR/agents/openai.yaml" 2>/dev/null || true
   chmod +x "$SKILL_DIR/scripts/"*.sh
   echo "  + updated scripts, templates, and SKILL.md"
   echo "  ~ DB and team configs preserved"
+  echo ""
+  echo "  ! Restart any running agent sessions to pick up the updated scripts."
+  echo "    In-flight watch.sh processes keep the old code until they restart."
   echo ""
   echo "  ✓ Update complete"
   echo ""
@@ -116,9 +183,11 @@ SKILL_DIR="$AGENTS_DIR/skills/$CMD_NAME"
 echo "  Installing to ~/.agents/skills/$CMD_NAME/ ..."
 mkdir -p "$SKILL_DIR"/{scripts,templates,db,agents}
 
-# SKILL.md is generated from the Codex command template (Codex reads SKILL.md directly)
-sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.codex.md" > "$SKILL_DIR/SKILL.md"
-cp "$SCRIPT_DIR/scripts/"*.sh "$SKILL_DIR/scripts/"
+# SKILL.md is generated from the agent-specific command template.
+SKILL_TEMPLATE=$(skill_template_for_agent_type "${AGENT_TYPE:-codex}")
+sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/$SKILL_TEMPLATE" > "$SKILL_DIR/SKILL.md"
+# Recursive copy so nested helper dirs (scripts/lib/) ship without enumerating files.
+cp -R "$SCRIPT_DIR/scripts/." "$SKILL_DIR/scripts/"
 
 # Replace placeholder in templates with actual skill name
 for tmpl in "$SCRIPT_DIR/templates/"*; do
@@ -149,6 +218,17 @@ if [ -d "$HOME/.claude" ]; then
   mkdir -p "$CC_COMMANDS_DIR"
   sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.claude-code.md" > "$CC_COMMANDS_DIR/$CMD_NAME.md"
   echo "  + installed /$CMD_NAME command to ~/.claude/commands/"
+fi
+
+# --- Install Copilot CLI skill ---
+# Copilot loads SKILL.md from ~/.copilot/skills/<name>/. The shared
+# ~/.agents/skills/<name>/SKILL.md is Codex-typed (whoami ... codex) and
+# would mis-identify a Copilot session — keep the Copilot copy separate.
+COPILOT_SKILL_DIR="$HOME/.copilot/skills/$CMD_NAME"
+if [ -d "$HOME/.copilot" ]; then
+  mkdir -p "$COPILOT_SKILL_DIR"
+  sed "s/__SKILL_NAME__/$CMD_NAME/g" "$SCRIPT_DIR/templates/cmd.copilot.md" > "$COPILOT_SKILL_DIR/SKILL.md"
+  echo "  + installed /$CMD_NAME skill to ~/.copilot/skills/"
 fi
 
 # --- Configure Codex sandbox (if Codex is installed) ---
@@ -201,10 +281,13 @@ echo ""
 echo "  ✓ Installed to ~/.agents/skills/$CMD_NAME/"
 echo ""
 echo "  Next steps:"
-  echo "    1. Restart your agent (Claude Code / Codex / Cursor) to pick up the new skill"
+echo "    1. Restart your agent (Claude Code / Codex / Gemini CLI / Antigravity / Cursor / Copilot CLI) to pick up the new skill"
 echo "    2. Run the command to join a team:"
 echo "       Claude Code:  /$CMD_NAME"
 echo "       Codex:        \$$CMD_NAME"
+echo "       Gemini CLI:   \$$CMD_NAME"
+echo "       Antigravity:  \$$CMD_NAME"
+echo "       Copilot CLI:  /$CMD_NAME"
 echo "       Cursor:       /$CMD_NAME or /skills, then set turn delivery per project"
 echo "       It will prompt for team name and agent name on first run."
 echo ""

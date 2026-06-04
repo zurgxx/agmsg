@@ -4,7 +4,7 @@ Developer documentation for contributors and maintainers.
 
 ## Identity Model
 
-An agent is identified by `(name, team)`. Project path and agent type (claude-code, codex, gemini, cursor, antigravity) are metadata — reference information stored alongside the identity but not part of it.
+An agent is identified by `(name, team)`. Project path and agent type (claude-code, codex, gemini, cursor, antigravity, copilot) are metadata — reference information stored alongside the identity but not part of it.
 
 - An agent can be registered from multiple projects under the same name
 - `whoami.sh` uses project path and type to suggest an identity, but the user can choose any name
@@ -16,6 +16,7 @@ An agent is identified by `(name, team)`. Project path and agent type (claude-co
 
 `~/.agents/skills/<cmd>/db/messages.db`
 
+- Path resolved by `scripts/lib/storage.sh` (`agmsg_db_path`); override the storage directory with `AGMSG_STORAGE_PATH` (env > built-in default). Scoped to the SQLite store only.
 - WAL journal mode for concurrent access (multiple readers + 1 writer)
 - Schema:
   ```sql
@@ -99,19 +100,29 @@ Cursor currently supports only `turn` and `off` delivery modes. `monitor` and `b
 
 **Gemini / Antigravity**: PostToolUse rule file invoking `check-inbox.sh` (turn-style inbox check, not Cursor/Codex JSON).
 
+**GitHub Copilot CLI stop hook** (`check-inbox.sh`):
+
+```
+Agent turn ends → <project>/.github/hooks/agmsg.json Stop → check-inbox.sh
+  ├─ Cooldown / no unread → JSON continue/skip (Copilot-specific shape)
+  └─ Unread → mark read_at → decision=block JSON
+```
+
+Copilot loads `SKILL.md` from `~/.copilot/skills/<cmd>/` (installed separately from the shared `~/.agents/skills/<cmd>/SKILL.md`). Only `turn` and `off` delivery modes are supported.
+
 ### Cooldown
 
-A marker file (`db/.lastcheck-<agent>`) tracks the last check time. Configurable via `hook.check_interval` (default 60 seconds).
+A marker file (`run/.lastcheck-<agent>`) tracks the last check time. Configurable via `hook.check_interval` (default 60 seconds). It lives in the run dir (hook runtime state), not the message store, so it is unaffected by `AGMSG_STORAGE_PATH`.
 
 ### Runtime comparison (delivery)
 
-| Aspect | Claude Code (turn) | Codex (turn) | Cursor (turn) |
-|---|---|---|---|
-| Hook config | `.claude/settings.local.json` | `.codex/hooks.json` | `.cursor/hooks.json` |
-| Entry script | `check-inbox.sh` | `check-inbox.sh` | `check-inbox-cursor.sh` |
-| Silent / skip | exit 0, no output | `{ "continue": true, ... }` | `{}` |
-| Notify | `decision: "block"` | `decision: "block"` | `followup_message` |
-| Monitor | `watch.sh` + SessionStart | N/A in agmsg | N/A (Phase 1) |
+| Aspect | Claude Code (turn) | Codex (turn) | Cursor (turn) | Copilot (turn) |
+|---|---|---|---|---|
+| Hook config | `.claude/settings.local.json` | `.codex/hooks.json` | `.cursor/hooks.json` | `.github/hooks/agmsg.json` |
+| Entry script | `check-inbox.sh` | `check-inbox.sh` | `check-inbox-cursor.sh` | `check-inbox.sh` |
+| Silent / skip | exit 0, no output | `{ "continue": true, ... }` | `{}` | Copilot JSON continue |
+| Notify | `decision: "block"` | `decision: "block"` | `followup_message` | `decision: "block"` |
+| Monitor | `watch.sh` + SessionStart | N/A in agmsg | N/A (Phase 1) | N/A in agmsg |
 
 ## Scripts
 
@@ -142,8 +153,10 @@ All scripts use only `bash` and `sqlite3`. No python3 dependency.
 ├── scripts/              # All shell scripts
 ├── templates/            # Command templates and Cursor rule template
 ├── db/
-│   ├── messages.db       # SQLite message store
-│   ├── config.yaml       # User configuration
+│   ├── messages.db       # SQLite message store (relocatable via AGMSG_STORAGE_PATH)
+│   └── config.yaml       # User configuration
+├── run/                  # Hook/watcher runtime state
+│   ├── watch.<sid>.pid   # Monitor watcher pidfiles
 │   └── .lastcheck-*      # Cooldown markers
 └── teams/
     └── <team>/

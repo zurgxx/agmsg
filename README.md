@@ -2,7 +2,7 @@
 
 Cross-agent messaging for CLI AI agents. No daemon, no network, no complexity.
 
-Claude Code, Codex, Gemini CLI, Cursor CLI, and any CLI agent can message each other via a shared SQLite database.
+Claude Code, Codex, Gemini CLI, Cursor CLI, GitHub Copilot CLI, and any CLI agent can message each other via a shared SQLite database.
 
 Two `monitor`-mode Claude Code instances, left alone in the same team, play tic-tac-toe against each other with no human in the loop — each picks up the other's move in real time:
 
@@ -20,12 +20,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/fujibee/agmsg/main/setup.sh)
 
 # Or clone first if you want to inspect the code
 git clone https://github.com/fujibee/agmsg.git && cd agmsg && ./install.sh
+# Cursor users: run ./install.sh --agent-type cursor instead
 
-# 2. Restart Claude Code / Codex / Cursor to pick up the new skill
+# 2. Restart Claude Code / Codex / Gemini CLI / Antigravity / Cursor / Copilot CLI to pick up the new skill
 
 # 3. Run the command — it will prompt for team and agent name on first use
 #    Claude Code:  /agmsg
 #    Codex:        $agmsg
+#    Gemini CLI:   $agmsg
+#    Antigravity:  $agmsg
+#    Copilot CLI:  /agmsg
 #    Cursor:       /agmsg or /skills
 ```
 
@@ -38,14 +42,17 @@ After setup, your agent handles everything — just talk to it naturally. "Send 
 ```bash
 ./install.sh              # Interactive (asks command name, default: agmsg)
 ./install.sh --cmd m      # Non-interactive with custom command name
+./install.sh --agent-type gemini  # Install a Gemini-oriented SKILL.md
+./install.sh --agent-type cursor  # Install a Cursor-oriented SKILL.md
 ```
 
 The **command name** determines:
 - Skill folder: `~/.agents/skills/<cmd>/`
 - Claude Code: `/<cmd>`
-- Codex: `$<cmd>`
+- Codex/Gemini/Antigravity: `$<cmd>`
+- Copilot CLI / Cursor: `/<cmd>` (Copilot via `~/.copilot/skills/<cmd>/`; Cursor via `/<cmd>` or `/skills`)
 
-After install, **restart your agent** (Claude Code / Codex / Cursor) so it picks up the new skill.
+After install, **restart your agent** (Claude Code / Codex / Gemini CLI / Antigravity / Cursor / Copilot CLI) so it picks up the new skill.
 
 ## Join a Team
 
@@ -104,18 +111,21 @@ Same project, same agent type, different role — for example a `tech-lead` iden
 
 Mechanics:
 
-- `actas <name>` is **exclusive**: switches both sending and receiving to `<name>`. The skill joins the role under your current team if needed, then TaskStops the running `agmsg inbox stream` Monitor and relaunches one filtered to `<name>` only (via `watch.sh`'s optional 4th argument). Messages addressed to other roles stop reaching the session until you `actas` again or end the session.
-- `drop <name>` removes only that role's registration for this project (via `reset.sh`). If the role is no longer registered anywhere, it's also dropped from the team config. If `<name>` was the currently-active role, the watcher is restarted in default mode (all roles registered for this project at relaunch time).
+- `actas <name>` is **exclusive across sessions**: switches both sending and receiving to `<name>`. The skill joins the role under your current team if needed, claims an exclusivity lock on `(team, name)` under the skill's run directory, then TaskStops the running `agmsg inbox stream` Monitor and relaunches one filtered to `<name>` only (via `watch.sh`'s optional 4th argument). Two effects: messages addressed to other roles stop reaching this session, and other live sessions also stop subscribing to `<name>` (their watchers exclude any pair locked by a peer at startup). If another session already holds the lock, the call refuses with a clear error — drop it from that session first. The lock is released by `drop`, by session end, or by garbage collection when the holding session is no longer alive.
+- `drop <name>` removes only that role's registration for this project (via `reset.sh`). If the role is no longer registered anywhere, it's also dropped from the team config. If `<name>` was the currently-active role, the watcher is restarted in default mode — no `actas` name filter, so it receives every (team, agent) pair registered for this project that isn't held by another session.
 - Switching is session-scoped state held by the agent. `/clear` or a new session resets back to the multiple-identities picker.
+- **Recovery**: `actas-claim.sh` writes the lock file before the skill TaskStops the old Monitor and launches the new one. If that subsequent dance fails (e.g. TaskStop succeeds but the new Monitor invocation errors out), the lock stays put but the session has no narrowed watcher. Run `/agmsg drop <name>` in this session, or end the session — either releases the lock so peers can pick it up.
+- **Liveness**: a stale lock is reclaimed when its owner session_id no longer maps to any live cc-instance, where "live" is checked via `kill -0`. PID recycling could in theory keep a long-dead session looking alive forever (and starve peers from claiming or reaching its name); this is tracked in [#67](https://github.com/fujibee/agmsg/issues/67) and not addressed in v1.
+- **Codex caveat**: on Codex, `$agmsg actas <name>` is **send-side only** for this session. Codex slash commands don't see a stable `session_id`, so they can't claim a peer-visible exclusivity lock — Claude Code peers will still subscribe to `<name>`. The receive side isn't actually narrowed either: `check-inbox.sh` resolves identity through `whoami.sh` (which picks the first registered agent) and has no view of the agent's in-session actas role, so Codex keeps polling whichever pair it would have without actas. The check-inbox lock filter only skips pairs *another* session owns. Treat Codex actas as a from-line override until a Codex session-id story exists. Claude Code's `/agmsg actas` does claim the lock symmetrically and is the path that exercises the full exclusivity model.
 
 #### Subscription model
 
 agmsg follows a **one CC session = one active role** model. Each watcher subscribes to a *static* set of identities decided at launch:
 
-- **Without `actas`**: the watcher subscribes to whichever `(team, agent)` pairs were registered for this `(project, agent_type)` at the moment `watch.sh` started. The set is *not* re-resolved later. A role joined mid-session via `actas` from another CC does *not* start arriving in CCs that were launched before it.
-- **After `actas <name>`**: the watcher is relaunched filtered to `<name>` only. Other registered roles stop arriving in this CC even if they pre-existed.
+- **Without `actas`**: the watcher subscribes to whichever `(team, agent)` pairs were registered for this `(project, agent_type)` at the moment `watch.sh` started, *minus* any pair currently locked by another live session's `actas` claim. The set is *not* re-resolved later — a peer that claims a name after this watcher launched will start receiving exclusively, but this watcher won't notice the loss until it restarts. A role joined mid-session via `actas` from another CC does *not* start arriving in CCs that were launched before it.
+- **After `actas <name>`**: the watcher is relaunched filtered to `<name>` only, and the lock that filter implies prevents peer watchers from ever subscribing to `<name>` while this session is live.
 
-This is intentional: it keeps each CC bound to one role's inbox, so a `tech-lead` window stays clear of `biz-analyst` traffic and vice versa — even when both roles are registered under the same project. To pick up a role added after a CC launched (without switching to it exclusively), restart the CC or `/clear` so SessionStart re-launches `watch.sh` with the fresh identity list.
+This is intentional: it keeps each CC bound to one role's inbox, so a `tech-lead` window stays clear of `biz-analyst` traffic and vice versa, and the exclusivity holds across sessions on the same machine rather than per-session. To pick up a role added after a CC launched (without switching to it exclusively), restart the CC or `/clear` so SessionStart re-launches `watch.sh` with the fresh identity list — and with the up-to-date lock view.
 
 The send side mirrors this: every `send.sh` call from this CC uses the active role as the `from` agent, whether that's the implicit one (default) or the one set by the most recent `actas`.
 
@@ -141,7 +151,7 @@ How incoming messages reach your agent. Pick one at first join via the prompt, o
 | mode | mechanism | latency | who it's for |
 |---|---|---|---|
 | **`monitor`** (default on Claude Code) | SessionStart hook → Monitor tool → blocking SQLite stream | ~5s | Claude Code users wanting real-time push |
-| **`turn`** (default on Codex) | Stop hook fires `check-inbox.sh` between assistant turns | until your next interaction | Codex (no Monitor tool); Claude Code users on a quieter loop |
+| **`turn`** (default on Codex / Copilot CLI) | Stop hook fires `check-inbox.sh` between assistant turns | until your next interaction | Codex / Copilot CLI (no Monitor tool); Claude Code users on a quieter loop |
 | **`both`** | monitor primary, turn as per-session safety net | ~5s; falls back to turn-end on watcher failure | belt-and-suspenders |
 | **`off`** | no automatic delivery | manual `/agmsg` only | minimalists |
 
@@ -199,7 +209,7 @@ Codex supports `mode turn` and `mode off` only — there's no Monitor tool to st
 Manual: use `/agmsg` or `/skills` as the entry point, then run agmsg scripts from the agent. If Cursor cannot find the agmsg skill, run this from the agmsg repository and then restart Cursor or reload rules/skills:
 
 ```bash
-./install.sh --cmd agmsg
+./install.sh --cmd agmsg --agent-type cursor
 ```
 
 Cursor integration has three parts:
@@ -221,6 +231,18 @@ Typical flow:
 - **monitor / both** — not supported on Cursor
 
 Markerless existing `.cursor/rules/agmsg.mdc` files are left untouched with a warning. Other files under `.cursor/rules/` are not modified.
+
+### GitHub Copilot CLI
+
+```
+/agmsg                          — invokes the agmsg skill
+```
+
+The Copilot installer drops a `SKILL.md` at `~/.copilot/skills/agmsg/` so
+`/agmsg` is auto-discovered. Per-project hooks live at
+`<project>/.github/hooks/agmsg.json`. Copilot CLI has no Monitor-tool
+equivalent, so only `mode turn` and `mode off` are supported. Asking for
+`monitor` or `both` is rejected with an error.
 
 ### Shell (any agent)
 
@@ -256,6 +278,21 @@ DB and team configs are preserved. Only scripts and assets are updated.
 ```
 
 Auto-detects installed skill directories and cleans up: skill files, slash commands, hooks, AGENTS.md sections, and team configs.
+
+## Configuration
+
+### Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGMSG_STORAGE_PATH` | `<skill>/db` | Directory holding the SQLite message store (`messages.db`). Override to relocate the store — handy for tests, sandboxes, or running isolated instances. |
+
+The message store path resolves as **`AGMSG_STORAGE_PATH` (env) > built-in default**. (A config-file layer is planned to slot in between the two as part of the storage-driver work; the intended order is env > config > default.) The override is scoped to the SQLite store only — team configs under `teams/` are unaffected.
+
+```bash
+# Run against an isolated store
+AGMSG_STORAGE_PATH=/tmp/agmsg-sandbox ./scripts/send.sh myteam alice bob "hi"
+```
 
 ## Tests
 

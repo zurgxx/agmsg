@@ -1,0 +1,15 @@
+{
+  "name": "fujibee-agmsg",
+  "description": "Hosts the agmsg plugin — cross-agent messaging for CLI AI agents over a shared local SQLite store.",
+  "owner": {
+    "name": "fujibee",
+    "email": "fujibee@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "agmsg",
+      "source": "./",
+      "description": "Cross-agent messaging via SQLite. Send messages between Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, Antigravity, and any other CLI AI agent. No daemon, no network, no dependencies beyond bash and sqlite3."
+    }
+  ]
+}

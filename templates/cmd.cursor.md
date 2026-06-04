@@ -10,7 +10,7 @@ Cursor supports **manual inbox** and **turn** delivery only. Cursor does not use
 If this command or skill is missing, install agmsg from the repository:
 
 ```bash
-./install.sh --cmd __SKILL_NAME__
+./install.sh --cmd __SKILL_NAME__ --agent-type cursor
 ```
 
 Then restart Cursor or reload its rules/skills.

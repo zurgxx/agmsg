@@ -1,6 +1,6 @@
 ---
 name: agmsg
-description: Cross-agent messaging via SQLite. Send messages between Claude Code, Codex, Gemini CLI, Cursor CLI, and other agents. No daemon, no network, no dependencies beyond bash and sqlite3.
+description: Cross-agent messaging via SQLite. Send messages between Claude Code, Codex, Gemini CLI, Cursor CLI, GitHub Copilot CLI, and other agents. No daemon, no network, no dependencies beyond bash and sqlite3.
 ---
 
 # Agent Messaging
@@ -13,7 +13,7 @@ description: Cross-agent messaging via SQLite. Send messages between Claude Code
 
 ```bash
 ~/.agents/skills/__SKILL_NAME__/scripts/whoami.sh "$(pwd)" <type>
-# type: claude-code, codex, gemini, cursor, antigravity
+# type: claude-code, codex, gemini, cursor, antigravity, copilot
 # Returns: agent=... / multiple=true ... / suggest=true ... / not_joined=true ...
 ```
 
@@ -52,12 +52,32 @@ Do NOT manually edit config files. Always use join.sh.
 # their cached team name in any running session.
 ~/.agents/skills/__SKILL_NAME__/scripts/rename-team.sh <old_team> <new_team>
 
-# Clear registrations for the current project/type
-~/.agents/skills/__SKILL_NAME__/scripts/reset.sh "$(pwd)" <type> [agent_id]
+# Clear registrations for the current project/type.
+# A trailing <session_id> additionally releases any actas exclusivity locks
+# this session held on <agent_id> so peers can pick them up immediately.
+~/.agents/skills/__SKILL_NAME__/scripts/reset.sh "$(pwd)" <type> [agent_id] [session_id]
 
-# Enable/disable auto message checking (hook)
-~/.agents/skills/__SKILL_NAME__/scripts/hook.sh on <type> "$(pwd)"
-~/.agents/skills/__SKILL_NAME__/scripts/hook.sh off <type> "$(pwd)"
+# Set delivery mode for this project. Replaces the legacy hook.sh on/off,
+# which is kept as a deprecated alias only.
+#   monitor — real-time push via SessionStart + Monitor tool (claude-code only)
+#   turn    — Stop-hook pulls at the end of each assistant turn
+#   both    — monitor primary, turn as fallback
+#   off     — no automatic delivery
+~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh set <mode> <type> "$(pwd)"
+~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh status <type> "$(pwd)"
+
+# Multiple roles per project (one CC = one active role).
+# Claude Code: `actas` claims an exclusivity lock for <name> across sessions
+# and restarts the Monitor filtered to <name> only; peer watchers stop
+# subscribing to <name> while this session holds the lock. `drop` releases.
+# Codex: actas is send-side only (no stable session_id during slash commands
+# → no peer-visible lock). See README "Codex caveat" for details.
+~/.agents/skills/__SKILL_NAME__/scripts/actas-claim.sh "$(pwd)" <type> <name> "$session_id"
+~/.agents/skills/__SKILL_NAME__/scripts/reset.sh "$(pwd)" <type> <name> "$session_id"
+
+# (Both of the above are normally driven by `/agmsg actas <name>` and
+#  `/agmsg drop <name>` slash commands, which also handle the Monitor
+#  TaskStop + relaunch dance described in the cmd template.)
 ```
 
 ## Architecture

@@ -78,6 +78,21 @@ hooks_json_valid() {
   [[ "$output" =~ "cursor" ]]
 }
 
+@test "cmd.cursor.md: self-install command includes --agent-type cursor" {
+  grep -Fq './install.sh --cmd __SKILL_NAME__ --agent-type cursor' \
+    "$BATS_TEST_DIRNAME/../templates/cmd.cursor.md"
+}
+
+@test "install: cmd.cursor.md template documents cursor agent-type install" {
+  local home
+  home="$(mktemp -d)"
+  run env HOME="$home" bash "$BATS_TEST_DIRNAME/../install.sh" --cmd mycmd --agent-type cursor
+  [ "$status" -eq 0 ]
+  grep -Fq './install.sh --cmd mycmd --agent-type cursor' \
+    "$home/.agents/skills/mycmd/templates/cmd.cursor.md"
+  rm -rf "$home"
+}
+
 @test "install: copies cursor rule template into installed skill templates" {
   local home installed_rule
   home="$(mktemp -d)"
