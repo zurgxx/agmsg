@@ -170,6 +170,40 @@ teardown() {
   ! grep -q 'whoami.sh "$(pwd)" codex' "$SK/SKILL.md"
 }
 
+@test "plugin SKILL.md bootstrap: a fresh plugin install path can bootstrap ~/.agents/skills/agmsg" {
+  # Simulate the post-plugin-install state: no ~/.agents/skills/agmsg yet, but
+  # the plugin marketplace flow has populated the cache dir with a copy of the
+  # repo. Then run the Step 0 bootstrap snippet from SKILL.md and assert the
+  # canonical install location exists.
+  local plugin_dir="$FAKE_HOME/.claude/plugins/cache/fujibee-agmsg/agmsg/1.0.0"
+  mkdir -p "$plugin_dir"
+  cp -R "$REPO_ROOT/." "$plugin_dir/"
+  [ ! -d "$SK" ]  # canonical agmsg location absent
+
+  # Run the same shell snippet our SKILL.md prescribes as Step 0.
+  HOME="$FAKE_HOME" bash -c '
+    if [ ! -d ~/.agents/skills/agmsg ]; then
+      installer=$(ls ~/.claude/plugins/cache/fujibee-agmsg/agmsg/*/install.sh 2>/dev/null | head -1)
+      [ -n "$installer" ] && bash "$installer" --cmd agmsg
+    fi
+  '
+
+  [ -d "$SK" ]
+  [ -f "$SK/db/messages.db" ]
+  [ -f "$SK/scripts/whoami.sh" ]
+  # The substituted SKILL.md the installer drops should not still carry the
+  # __SKILL_NAME__ placeholder (Codex / Gemini / Antigravity all read it).
+  ! grep -q "__SKILL_NAME__" "$SK/SKILL.md"
+}
+
+# Regression guard for #83: the plugin's SKILL.md is consumed verbatim by the
+# Claude Code plugin install path, so it must not carry the install-time
+# __SKILL_NAME__ placeholder (which install.sh substitutes for the
+# generated-per-agent-type SKILL.md, but the plugin install does not).
+@test "plugin SKILL.md: repo SKILL.md has no unsubstituted __SKILL_NAME__ placeholder" {
+  ! grep -q "__SKILL_NAME__" "$REPO_ROOT/SKILL.md"
+}
+
 @test "install: watch.sh self-cleans a prior watcher on re-invocation for the same sid" {
   HOME="$FAKE_HOME" bash "$REPO_ROOT/install.sh" --cmd agmsg
   bash "$SK/scripts/join.sh" demo alice claude-code /tmp/install-projA

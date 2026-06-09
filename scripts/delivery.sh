@@ -342,14 +342,33 @@ strip_agmsg_event() {
   "
 }
 
+# Wrap a POSIX shell command so Codex's Windows runner executes it through Git
+# Bash. On native Windows, Codex runs each hook command via PowerShell, which
+# cannot execute a bare POSIX ".sh" path, so the hook exits non-zero. Codex hook
+# config supports a "commandWindows" key that takes precedence on Windows; the
+# "& '<bash.exe>' -lc \"...\"" form is what Codex itself emits for shell calls.
+windows_wrap() {
+  local posix_cmd="$1"
+  printf "& 'C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe' -lc \"%s\"" "$posix_cmd"
+}
+
 # Append a single entry of the form {"matcher":"","hooks":[{"type":"command","command":"<cmd>"}]}
-# to .hooks.<event>, creating arrays/objects as needed.
+# to .hooks.<event>, creating arrays/objects as needed. For Codex agents (pass
+# "codex" as the 4th arg) the entry also carries a "commandWindows" so the hook
+# runs on native Windows; other agent types are unchanged.
 add_event_entry() {
   local settings_esc="$1"
   local event="$2"
   local cmd="$3"
+  local hook_type="${4:-}"
 
-  local entry="{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$cmd\"}]}"
+  local hook_inner="\"type\":\"command\",\"command\":\"$cmd\""
+  if [ "$hook_type" = "codex" ]; then
+    local cw; cw=$(windows_wrap "$cmd")
+    cw="${cw//\\/\\\\}"; cw="${cw//\"/\\\"}"
+    hook_inner="$hook_inner,\"commandWindows\":\"$cw\""
+  fi
+  local entry="{\"matcher\":\"\",\"hooks\":[{$hook_inner}]}"
   local entry_esc
   entry_esc=$(printf '%s' "$entry" | sed "s/'/''/g")
 
@@ -506,20 +525,20 @@ apply_settings() {
     monitor)
       local ss="'$SKILL_DIR/scripts/session-start.sh' '$type' '$project'"
       local se="'$SKILL_DIR/scripts/session-end.sh'   '$type' '$project'"
-      settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" | sed "s/'/''/g")
-      settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" "$type" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" "$type" | sed "s/'/''/g")
       ;;
     turn)
       local cmd="'$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'"
-      settings_esc=$(add_event_entry "$settings_esc" "Stop" "$cmd" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "Stop" "$cmd" "$type" | sed "s/'/''/g")
       ;;
     both)
       local ss="'$SKILL_DIR/scripts/session-start.sh' '$type' '$project'"
       local se="'$SKILL_DIR/scripts/session-end.sh'   '$type' '$project'"
       local st="'$SKILL_DIR/scripts/check-inbox.sh'   '$type' '$project'"
-      settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" | sed "s/'/''/g")
-      settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" | sed "s/'/''/g")
-      settings_esc=$(add_event_entry "$settings_esc" "Stop"         "$st" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" "$type" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" "$type" | sed "s/'/''/g")
+      settings_esc=$(add_event_entry "$settings_esc" "Stop"         "$st" "$type" | sed "s/'/''/g")
       ;;
     off)
       : # already stripped
@@ -634,13 +653,13 @@ do_set() {
       ;;
     turn)
       echo "Future sessions: Stop hook will check inbox between turns."
-      # If a watcher is alive in this session, ask Claude to stop it.
-      kill_all_watchers >/dev/null 2>&1 || true
+      # Stop only THIS project's watcher; other projects/sessions keep theirs.
+      kill_all_watchers "$PROJECT" >/dev/null 2>&1 || true
       emit_stop_directive
       ;;
     off)
       echo "Future sessions: no automatic delivery."
-      kill_all_watchers >/dev/null 2>&1 || true
+      kill_all_watchers "$PROJECT" >/dev/null 2>&1 || true
       emit_stop_directive
       ;;
   esac
@@ -740,6 +759,11 @@ do_status() {
 }
 
 kill_all_watchers() {
+  # With no argument, kills every running watch.sh (used by stop/restart).
+  # With a <project> argument, kills only watchers launched for that project
+  # path, so switching one project's delivery mode (set turn/off) never tears
+  # down another project's — or another concurrent session's — monitor.
+  local project="${1:-}"
   local killed=0
   if [ -d "$RUN_DIR" ]; then
     for f in "$RUN_DIR"/watch.*.pid; do
@@ -753,6 +777,15 @@ kill_all_watchers() {
         cmd=$(ps -o args= -p "$pid" 2>/dev/null || true)
         case "$cmd" in
           *"$SKILL_DIR/scripts/watch.sh"*)
+            # watch.sh argv is "watch.sh <session_id> <project> <type> [name]",
+            # so the project path is a space-delimited field. When scoped,
+            # skip (and preserve the pidfile of) watchers for other projects.
+            if [ -n "$project" ]; then
+              case " $cmd " in
+                *" $project "*) ;;
+                *) continue ;;
+              esac
+            fi
             kill "$pid" 2>/dev/null && killed=$((killed + 1)) ;;
           *) ;;  # not our watcher; leave it
         esac

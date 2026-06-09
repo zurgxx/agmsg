@@ -9,10 +9,31 @@ description: Cross-agent messaging via SQLite. Send messages between Claude Code
 
 ## How to use
 
+### Step 0: First-run bootstrap
+
+agmsg keeps its SQLite database, team registry, and runtime state under `~/.agents/skills/agmsg/`. The `./install.sh` install path creates that tree; the Claude Code plugin install path does not (the plugin marketplace flow only drops the skill content into `~/.claude/plugins/cache/`). Before any other command, bootstrap if needed:
+
+```bash
+if [ ! -d ~/.agents/skills/agmsg ]; then
+  # Locate the plugin install script (any version), run it once.
+  installer=$(ls ~/.claude/plugins/cache/fujibee-agmsg/agmsg/*/install.sh 2>/dev/null | head -1)
+  if [ -n "$installer" ]; then
+    bash "$installer" --cmd agmsg
+  else
+    echo "agmsg not installed. Either:" >&2
+    echo "  - run ./install.sh in the agmsg repo, or" >&2
+    echo "  - install via /plugin marketplace add fujibee/agmsg && /plugin install agmsg@fujibee-agmsg" >&2
+    exit 1
+  fi
+fi
+```
+
+After this runs once, `~/.agents/skills/agmsg/` is populated and you can skip Step 0 on future invocations.
+
 ### Step 1: Check identity
 
 ```bash
-~/.agents/skills/__SKILL_NAME__/scripts/whoami.sh "$(pwd)" <type>
+~/.agents/skills/agmsg/scripts/whoami.sh "$(pwd)" <type>
 # type: claude-code, codex, gemini, cursor, antigravity, copilot
 # Returns: agent=... / multiple=true ... / suggest=true ... / not_joined=true ...
 ```
@@ -22,7 +43,7 @@ description: Cross-agent messaging via SQLite. Send messages between Claude Code
 Ask the user for a team name and agent name, then run:
 
 ```bash
-~/.agents/skills/__SKILL_NAME__/scripts/join.sh <team> <agent_name> <type> "$(pwd)"
+~/.agents/skills/agmsg/scripts/join.sh <team> <agent_name> <type> "$(pwd)"
 ```
 
 Do NOT manually edit config files. Always use join.sh.
@@ -33,29 +54,29 @@ Do NOT manually edit config files. Always use join.sh.
 
 ```bash
 # Check inbox (marks messages as read) — DEFAULT action
-~/.agents/skills/__SKILL_NAME__/scripts/inbox.sh <team> <agent_id>
+~/.agents/skills/agmsg/scripts/inbox.sh <team> <agent_id>
 
 # Send a message
-~/.agents/skills/__SKILL_NAME__/scripts/send.sh <team> <from_agent> <to_agent> "<message>"
+~/.agents/skills/agmsg/scripts/send.sh <team> <from_agent> <to_agent> "<message>"
 
 # Message history
-~/.agents/skills/__SKILL_NAME__/scripts/history.sh <team> [agent_id] [limit]
+~/.agents/skills/agmsg/scripts/history.sh <team> [agent_id] [limit]
 
 # List team members
-~/.agents/skills/__SKILL_NAME__/scripts/team.sh <team>
+~/.agents/skills/agmsg/scripts/team.sh <team>
 
 # Leave a team
-~/.agents/skills/__SKILL_NAME__/scripts/leave.sh <team> <agent_id>
+~/.agents/skills/agmsg/scripts/leave.sh <team> <agent_id>
 
 # Rename a team (moves dir, updates config + messages).
 # After renaming, each existing member should re-run whoami.sh to refresh
 # their cached team name in any running session.
-~/.agents/skills/__SKILL_NAME__/scripts/rename-team.sh <old_team> <new_team>
+~/.agents/skills/agmsg/scripts/rename-team.sh <old_team> <new_team>
 
 # Clear registrations for the current project/type.
 # A trailing <session_id> additionally releases any actas exclusivity locks
 # this session held on <agent_id> so peers can pick them up immediately.
-~/.agents/skills/__SKILL_NAME__/scripts/reset.sh "$(pwd)" <type> [agent_id] [session_id]
+~/.agents/skills/agmsg/scripts/reset.sh "$(pwd)" <type> [agent_id] [session_id]
 
 # Set delivery mode for this project. Replaces the legacy hook.sh on/off,
 # which is kept as a deprecated alias only.
@@ -63,8 +84,8 @@ Do NOT manually edit config files. Always use join.sh.
 #   turn    — Stop-hook pulls at the end of each assistant turn
 #   both    — monitor primary, turn as fallback
 #   off     — no automatic delivery
-~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh set <mode> <type> "$(pwd)"
-~/.agents/skills/__SKILL_NAME__/scripts/delivery.sh status <type> "$(pwd)"
+~/.agents/skills/agmsg/scripts/delivery.sh set <mode> <type> "$(pwd)"
+~/.agents/skills/agmsg/scripts/delivery.sh status <type> "$(pwd)"
 
 # Multiple roles per project (one CC = one active role).
 # Claude Code: `actas` claims an exclusivity lock for <name> across sessions
@@ -72,8 +93,8 @@ Do NOT manually edit config files. Always use join.sh.
 # subscribing to <name> while this session holds the lock. `drop` releases.
 # Codex: actas is send-side only (no stable session_id during slash commands
 # → no peer-visible lock). See README "Codex caveat" for details.
-~/.agents/skills/__SKILL_NAME__/scripts/actas-claim.sh "$(pwd)" <type> <name> "$session_id"
-~/.agents/skills/__SKILL_NAME__/scripts/reset.sh "$(pwd)" <type> <name> "$session_id"
+~/.agents/skills/agmsg/scripts/actas-claim.sh "$(pwd)" <type> <name> "$session_id"
+~/.agents/skills/agmsg/scripts/reset.sh "$(pwd)" <type> <name> "$session_id"
 
 # (Both of the above are normally driven by `/agmsg actas <name>` and
 #  `/agmsg drop <name>` slash commands, which also handle the Monitor
@@ -82,8 +103,8 @@ Do NOT manually edit config files. Always use join.sh.
 
 ## Architecture
 
-- **Storage**: SQLite with WAL mode in `~/.agents/skills/__SKILL_NAME__/db/messages.db`
-- **Teams**: `~/.agents/skills/__SKILL_NAME__/teams/<name>/config.json`
+- **Storage**: SQLite with WAL mode in `~/.agents/skills/agmsg/db/messages.db`
+- **Teams**: `~/.agents/skills/agmsg/teams/<name>/config.json`
 - **Concurrency**: WAL allows multiple readers + 1 writer without conflicts
 - **No daemon**: Direct DB access via `sqlite3` CLI
 - **Dependencies**: bash, sqlite3 (no python3 required)
