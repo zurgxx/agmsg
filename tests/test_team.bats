@@ -153,6 +153,19 @@ teardown() {
   [[ "$output" =~ "type=codex" ]]
 }
 
+@test "whoami: auto-detects cursor from cursor-agent process name" {
+  local fake_cli
+  fake_cli="$BATS_TEST_TMPDIR/cursor-agent"
+  cp "$(command -v bash)" "$fake_cli"
+  chmod +x "$fake_cli"
+  bash "$SCRIPTS/join.sh" myteam alice cursor /tmp/proj
+  unset CLAUDE_CODE_SESSION_ID CODEX_SANDBOX CODEX_THREAD_ID GEMINI_API_KEY GOOGLE_GEMINI_CLI
+  run "$fake_cli" "$SCRIPTS/whoami.sh" /tmp/proj
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "agent=alice" ]]
+  [[ "$output" =~ "type=cursor" ]]
+}
+
 @test "whoami: defaults to claude-code when no env vars set" {
   bash "$SCRIPTS/join.sh" myteam alice claude-code /tmp/proj
   run bash "$SCRIPTS/whoami.sh" /tmp/proj

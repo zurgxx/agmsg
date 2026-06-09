@@ -515,6 +515,25 @@ JSON
   [ "$output" = "{}" ]
 }
 
+@test "check-inbox-cursor: cooldown marker is created under run/" {
+  bash "$SCRIPTS/join.sh" testteam alice cursor "$TEST_PROJECT"
+  bash "$SCRIPTS/send.sh" testteam bob alice "hello"
+  echo '{}' | bash "$SCRIPTS/check-inbox-cursor.sh" "$TEST_PROJECT" >/dev/null
+  [ -f "$TEST_SKILL_DIR/run/.lastcheck-alice" ]
+  [ ! -f "$TEST_SKILL_DIR/db/.lastcheck-alice" ]
+}
+
+@test "check-inbox-cursor: AGMSG_STORAGE_PATH override returns unread messages" {
+  local store="$BATS_TEST_TMPDIR/cursor-store"
+  bash "$SCRIPTS/join.sh" testteam alice cursor "$TEST_PROJECT"
+  AGMSG_STORAGE_PATH="$store" bash "$SCRIPTS/send.sh" testteam bob alice "via override"
+  rm -rf "$TEST_SKILL_DIR/db"
+  run bash -c "echo '{}' | AGMSG_STORAGE_PATH='$store' bash '$SCRIPTS/check-inbox-cursor.sh' '$TEST_PROJECT'"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "followup_message" ]]
+  [[ "$output" =~ "via override" ]]
+}
+
 @test "check-inbox-cursor: loop_count at limit returns {}" {
   bash "$SCRIPTS/join.sh" testteam alice cursor "$TEST_PROJECT"
   bash "$SCRIPTS/send.sh" testteam bob alice "hello"

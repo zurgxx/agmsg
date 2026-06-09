@@ -11,6 +11,7 @@ PROJECT="${1:?Usage: check-inbox-cursor.sh <project_path>}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/lib/storage.sh"
 TYPE="cursor"
 
 sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
@@ -85,8 +86,8 @@ if [ -z "$AGENT" ] || [ -z "$TEAMS" ]; then
   exit 0
 fi
 
-# Cooldown
-MARKER="$SKILL_DIR/db/.lastcheck-$AGENT"
+# Cooldown — marker lives in run/, independent of AGMSG_STORAGE_PATH.
+MARKER="$SKILL_DIR/run/.lastcheck-$AGENT"
 if [ -f "$MARKER" ]; then
   if [ "$(uname)" = "Darwin" ]; then
     last=$(stat -f %m "$MARKER")
@@ -103,9 +104,10 @@ if [ -f "$MARKER" ]; then
   fi
 fi
 
+mkdir -p "$SKILL_DIR/run"
 touch "$MARKER"
 
-DB="$SKILL_DIR/db/messages.db"
+DB="$(agmsg_db_path)"
 if [ ! -f "$DB" ]; then
   emit_empty
   exit 0
